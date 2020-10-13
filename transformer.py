@@ -164,9 +164,14 @@ class PPI_predictor(nn.Module):
 
     def __call__(self, data, train=True):
         inputs, correct_interaction = data[:-1], data[-1]
+        #print(inputs)
+        #print(correct_interaction)
         predicted_interaction = self.forward(inputs)
 
         if train:
+            #print(predicted_interaction.size())
+            #print(correct_interaction.size())
+            #print(correct_interaction)
             loss = F.cross_entropy(predicted_interaction, correct_interaction)
             return loss
         else:
@@ -524,14 +529,26 @@ for i in ppi_lines:
     #print(w1)
     w2 = split_sequence(p2, ngram)
     #print(w2)
-    interaction=int(ppi[2])
+    interaction=[int(ppi[2])]
+    #if (interaction!=0 and interaction!=1):
+    #    print(interaction)
+    #    print('error')
     w1=torch.LongTensor(w1).to(device)
     w2=torch.LongTensor(w2).to(device)
     interaction=torch.LongTensor(interaction).to(device)
+    
+    #if (interaction!=0 and interaction!=1):
+    #    print(ppi[2])
     dataset.append([w1,w2,interaction])  ## int array, int array, int
 
+
+
+
+### datasets:
+    
 #dataset = rm_long(dataset,6000)
 dataset = shuffle_dataset(dataset, 1234)
+dataset=dataset[:5000]
 dataset_train, dataset_ = split_dataset(dataset, 0.8)
 dataset_dev, dataset_test = split_dataset(dataset_, 0.5)
 
