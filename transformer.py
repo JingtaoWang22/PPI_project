@@ -109,7 +109,7 @@ class PPI_predictor(nn.Module):
         self.W_interaction = nn.Linear(2*self.dim, 2)
         
     
-    def attention_cnn(self, x, xs, layer):
+    def attention_cnn(self,  xs, layer):
         """The attention mechanism is applied to the last layer of CNN."""
 
         xs = torch.unsqueeze(torch.unsqueeze(xs, 0), 0)
@@ -117,14 +117,14 @@ class PPI_predictor(nn.Module):
             xs = torch.relu(self.W_cnn[i](xs))
         xs = torch.squeeze(torch.squeeze(xs, 0), 0)
 
-        h = torch.relu(self.W_attention(x))
-        hs = torch.relu(self.W_attention(xs))
-        weights = torch.tanh(F.linear(h, hs))
-        ys = torch.t(weights) * hs
+        #h = torch.relu(self.W_attention(x))
+        #hs = torch.relu(self.W_attention(xs))
+        #weights = torch.tanh(F.linear(h, hs))
+        #ys = torch.t(weights) * hs
 
         # return torch.unsqueeze(torch.sum(ys, 0), 0)
-        return torch.unsqueeze(torch.mean(ys, 0), 0)
-        #return xs
+        #return torch.unsqueeze(torch.mean(ys, 0), 0)
+        return xs
         
     def transformer(self, protein, n_encoder, n_decoder, heads):
         protein=self.positional_encoder(protein)
@@ -140,6 +140,9 @@ class PPI_predictor(nn.Module):
         
         words1 = self.embed_word(p1)
         words2 = self.embed_word(p2)
+        
+        words1=self.attention_cnn(words1,3)
+        words2=self.attention_cnn(words2,3)
         
         p1_vector = self.transformer(words1,
                                      self.n_encoder,self.n_decoder,self.heads)
@@ -548,7 +551,7 @@ for i in ppi_lines:
     
 #dataset = rm_long(dataset,6000)
 dataset = shuffle_dataset(dataset, 1234)
-dataset=dataset[:5000]
+dataset=dataset[:50]
 dataset_train, dataset_ = split_dataset(dataset, 0.8)
 dataset_dev, dataset_test = split_dataset(dataset_, 0.5)
 
