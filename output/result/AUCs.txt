@@ -1,0 +1,1 @@
+Epoch	Time(sec)	Loss_train	AUC_dev	AUC_test	Precision_test	Recall_test
