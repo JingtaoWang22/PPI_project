@@ -28,6 +28,7 @@ import copy
 import math
 from sklearn.metrics import roc_auc_score, precision_score, recall_score
 from torch.autograd import Variable
+import matplotlib.pyplot as plt
 
 ### hyper parameters
 
@@ -41,16 +42,13 @@ layer_output=1
 heads=2
 n_encoder=3
 n_decoder=1
-lr=1e-4 
+lr=1e-3 
 lr_decay=0.5 
 decay_interval=10 
 weight_decay=0 
 iteration=100 
 warmup_step=50
 dropout=0
-
-
-
 
 
 
@@ -71,6 +69,10 @@ class PPI_predictor(nn.Module):
         self.dim=dim
         self.dim_gnn=dim
         self.d_ff=d_ff        
+        
+        
+        ##max pooling (k most excited neurons)
+        self.k=10
         
         ### models
 
@@ -102,11 +104,12 @@ class PPI_predictor(nn.Module):
         self.encoder=encoder(self.n_encoder, self.dim, self.d_ff, self.dropout, heads=self.heads)
         self.decoder=decoder(self.n_decoder, self.dim, self.d_ff, self.dropout, heads=self.heads)
         
+        self.tgt1=tgt_out( self.heads, self.dim, dropout=0)
         
         # interaction:
         self.W_out = nn.ModuleList([nn.Linear(self.dim_gnn+self.dim, self.dim_gnn+self.dim)
                                     for _ in range(layer_output)])
-        self.W_interaction = nn.Linear(2*self.dim, 2)
+        self.W_interaction = nn.Linear(2*self.k, 2)
         
     
     def attention_cnn(self,  xs, layer):
@@ -157,19 +160,42 @@ class PPI_predictor(nn.Module):
         p2_vector=p2_vector.mean(axis=0).reshape(1,-1)
         #print(p1_vector.size())
         #print(p2_vector.size())
-        cat_vector = torch.cat((p1_vector, p2_vector), 1)
+        
+        p1=p1_vector.topk(self.k).values
+        p2=p2_vector.topk(self.k).values
+        
+        
+            
+        
+        
+        
+        cat_vector = torch.cat((p1, p2), 1)
         #print(cat_vector.size())
         #for j in range(layer_output):
         #    cat_vector = torch.relu(self.W_out[j](cat_vector))
         interaction = self.W_interaction(cat_vector)
 
-        return interaction
-
+        return interaction,p1_vector,p2_vector
+    
+    def attnscore(self,p1): ## probably not useful because the model has changed
+        words1 = self.embed_word(p1)
+        
+        words1=self.attention_cnn(words1,3)
+        
+        p1_vector = self.transformer(words1,
+                                     self.n_encoder,self.n_decoder,self.heads)
+        scores = torch.matmul(p1_vector,p1_vector.T)                    # heads, length, length
+        p_attn = F.softmax(scores, dim = 1)
+        fig, ax = plt.subplots()
+        im = ax.imshow(p_attn.detach())
+        print(p_attn)
+        
+        
     def __call__(self, data, train=True):
         inputs, correct_interaction = data[:-1], data[-1]
         #print(inputs)
         #print(correct_interaction)
-        predicted_interaction = self.forward(inputs)
+        predicted_interaction,p1,p2 = self.forward(inputs)
 
         if train:
             #print(predicted_interaction.size())
@@ -442,7 +468,19 @@ class Tester(object):
         AUC = roc_auc_score(T, S)
         precision = precision_score(T, Y)
         recall = recall_score(T, Y)
-        return AUC, precision, recall
+        
+        tp=np.sum(T)
+        total=len(T)
+        tn=total-tp
+        fp=0
+        for i in range(len(T)):
+            if Y[i]==[1] and T[i]!=[1]:
+                fp+=1
+        specificity=tn/(tn+fp)
+        
+        f1=2*(precision*recall)/(precision+recall)
+        
+        return AUC, precision, recall, specificity, f1
 
     def save_AUCs(self, AUCs, filename):
         with open(filename, 'a') as f:
@@ -551,7 +589,7 @@ for i in ppi_lines:
     
 #dataset = rm_long(dataset,6000)
 dataset = shuffle_dataset(dataset, 1234)
-dataset=dataset[:50]
+#dataset=dataset[:50]
 dataset_train, dataset_ = split_dataset(dataset, 0.8)
 dataset_dev, dataset_test = split_dataset(dataset_, 0.5)
 
@@ -590,7 +628,7 @@ tester = Tester(model)
 file_AUCs = 'output/result/AUCs.txt'
 file_model = 'output/model/model'
 AUCs = ('Epoch\tTime(sec)\tLoss_train\tAUC_dev\t'
-            'AUC_test\tPrecision_test\tRecall_test')
+            'AUC_test\tPrecision_test\tRecall_test\tspecificity_test\tf1_test')
 with open(file_AUCs, 'w') as f:
     f.write(AUCs + '\n')
 
@@ -606,11 +644,11 @@ for epoch in range(1, warmup_step):
     trainer.optimizer.param_groups[0]['lr'] += (lr-1e-7)/warmup_step
     loss_train = trainer.train(dataset_train)
     AUC_dev = tester.test(dataset_dev)[0]
-    AUC_test, precision_test, recall_test = tester.test(dataset_test)
+    AUC_test, precision_test, recall_test,specificity_test,f1_test = tester.test(dataset_test)
     end = timeit.default_timer()
     time = end - start
     AUCs = [epoch, time, loss_train, AUC_dev,
-             AUC_test, precision_test, recall_test]
+             AUC_test, precision_test, recall_test,specificity_test,f1_test]
     tester.save_AUCs(AUCs, file_AUCs)
     tester.save_model(model, file_model)
     print('\t'.join(map(str, AUCs)))
@@ -622,13 +660,13 @@ for epoch in range(1, iteration):
 
     loss_train = trainer.train(dataset_train)
     AUC_dev = tester.test(dataset_dev)[0]
-    AUC_test, precision_test, recall_test = tester.test(dataset_test)
+    AUC_test, precision_test, recall_test,specificity_test,f1_test = tester.test(dataset_test)
 
     end = timeit.default_timer()
     time = end - start
 
     AUCs = [epoch, time, loss_train, AUC_dev,
-            AUC_test, precision_test, recall_test]
+            AUC_test, precision_test, recall_test,specificity_test,f1_test]
     tester.save_AUCs(AUCs, file_AUCs)
     tester.save_model(model, file_model)
 
