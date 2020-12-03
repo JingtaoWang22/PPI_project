@@ -42,10 +42,10 @@ layer_output=1
 heads=2
 n_encoder=3
 n_decoder=1
-lr=1e-3 
-lr_decay=0.5 
+lr=1e-4 
+lr_decay=0.6
 decay_interval=10 
-weight_decay=0 
+weight_decay=0
 iteration=100 
 warmup_step=50
 dropout=0
@@ -72,7 +72,7 @@ class PPI_predictor(nn.Module):
         
         
         ##max pooling (k most excited neurons)
-        self.k=10
+        self.k=50
         
         ### models
 
@@ -106,10 +106,13 @@ class PPI_predictor(nn.Module):
         
         self.tgt1=tgt_out( self.heads, self.dim, dropout=0)
         
+        ## concate & attention
+        self.W_ff1 = nn.Linear(self.dim, self.dim)
+        self.W_ff2 = nn.Linear(self.dim, self.dim)
+        self.linears = clones(nn.Linear(dim, dim), 4)
         # interaction:
-        self.W_out = nn.ModuleList([nn.Linear(self.dim_gnn+self.dim, self.dim_gnn+self.dim)
-                                    for _ in range(layer_output)])
-        self.W_interaction = nn.Linear(2*self.k, 2)
+        self.W_out = nn.Linear(self.k, 1)
+        self.W_interaction = nn.Linear(2*self.dim, 2)
         
     
     def attention_cnn(self,  xs, layer):
@@ -156,25 +159,55 @@ class PPI_predictor(nn.Module):
         
         """Concatenate the above two vectors and output the interaction."""
 
-        p1_vector=p1_vector.mean(axis=0).reshape(1,-1)
-        p2_vector=p2_vector.mean(axis=0).reshape(1,-1)
         #print(p1_vector.size())
-        #print(p2_vector.size())
-        
-        p1=p1_vector.topk(self.k).values
-        p2=p2_vector.topk(self.k).values
-        
-        
-            
-        
-        
-        
-        cat_vector = torch.cat((p1, p2), 1)
-        #print(cat_vector.size())
-        #for j in range(layer_output):
-        #    cat_vector = torch.relu(self.W_out[j](cat_vector))
-        interaction = self.W_interaction(cat_vector)
+  
 
+        p1=p1_vector.topk(self.k,dim=0).values
+        p2=p2_vector.topk(self.k,dim=0).values
+        
+        p1=self.W_ff1(p1)  # k x dim
+        p2=self.W_ff2(p2)  # k x dim
+        
+        
+        nwords = self.k
+        d_k=int(self.dim/self.heads)
+        query, key, value1, value2 = \
+            [l(x).view(nwords, -1, self.heads, d_k).transpose(1, 2)
+             for l, x in zip(self.linears, (p1, p2, p1,p2))]
+        # qkv.size() = length,heads,1,dk
+            
+        query=query.squeeze(2).transpose(0,1)               # heads, length, dk
+        key=key.squeeze(2).transpose(0,1).transpose(1,2)    # heads, dk, length
+        value1=value1.squeeze(2).transpose(0,1)               # heads, length, dk
+        value2=value2.squeeze(2).transpose(0,1)  
+        scores = torch.matmul(query,key)                    # heads, length, length
+        p_attn = F.softmax(scores, dim = 2)                 # heads, length, length
+
+
+        
+        x1=torch.matmul(p_attn, value1)                       # heads, length, dk
+        x1=x1.transpose(0,1).contiguous().view([nwords,self.heads * d_k]) 
+        x1=self.linears[-1](x1) # k x dim
+        x1=x1.sum(dim=0).view([1,self.dim])
+        
+        
+        x2=torch.matmul(p_attn, value2)                       # heads, length, dk
+        x2=x2.transpose(0,1).contiguous().view([nwords,self.heads * d_k]) 
+        x2=self.linears[-1](x2)
+        x2=x2.sum(dim=0).view([1,self.dim])
+        
+        
+        
+        
+        #print(x1.size())
+        #print(x2.size())
+        
+        cat_vector = torch.cat((x1, x2), 1)
+        
+        #print(cat_vector.size())
+        
+        interaction = self.W_interaction(cat_vector)
+        
         return interaction,p1_vector,p2_vector
     
     def attnscore(self,p1): ## probably not useful because the model has changed
