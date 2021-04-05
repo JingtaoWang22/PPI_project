@@ -51,7 +51,7 @@ warmup_step=50
 dropout=0
 
 
-
+batch_size = 4
 
 
 ### PPI model
@@ -71,8 +71,9 @@ class PPI_predictor(nn.Module):
         self.d_ff=d_ff        
         
         
+        
         ##max pooling (k most excited neurons)
-        self.k=50
+        self.k=40
         
         ### models
 
@@ -100,7 +101,7 @@ class PPI_predictor(nn.Module):
         
         # transformer:
         self.embed_word = nn.Embedding(n_word, self.dim)
-        self.positional_encoder=positional_encoder(self.dim,self.dropout)
+
         self.encoder=encoder(self.n_encoder, self.dim, self.d_ff, self.dropout, heads=self.heads)
         self.decoder=decoder(self.n_decoder, self.dim, self.d_ff, self.dropout, heads=self.heads)
         
@@ -133,7 +134,6 @@ class PPI_predictor(nn.Module):
         return xs
         
     def transformer(self, protein, n_encoder, n_decoder, heads):
-        protein=self.positional_encoder(protein)
         protein=self.encoder(protein)
         return protein
         
@@ -142,7 +142,7 @@ class PPI_predictor(nn.Module):
         p1, p2 = inputs
 
 
-        """Protein vector with transformer."""
+        """Processing each protein representations with PROTEIN TRANSFORMER """
         
         words1 = self.embed_word(p1)
         words2 = self.embed_word(p2)
@@ -157,7 +157,7 @@ class PPI_predictor(nn.Module):
         # attention CNN
         #protein_vector = self.attention_cnn(compound_vector,protein_vector,3)
         
-        """Concatenate the above two vectors and output the interaction."""
+        """Concatenate the above two vectors using attention mechanism and output the interaction."""
 
         #print(p1_vector.size())
   
@@ -196,11 +196,6 @@ class PPI_predictor(nn.Module):
         x2=self.linears[-1](x2)
         x2=x2.sum(dim=0).view([1,self.dim])
         
-        
-        
-        
-        #print(x1.size())
-        #print(x2.size())
         
         cat_vector = torch.cat((x1, x2), 1)
         
@@ -249,24 +244,6 @@ class PPI_predictor(nn.Module):
 ### transformer:
 def clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
-
-class positional_encoder(nn.Module):
-    def __init__(self, d_model, dropout, max_len=6001):
-        super(positional_encoder, self).__init__()
-        # Compute the positional encodings once in log space.
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp((torch.arange(0, d_model, 2)).type(torch.FloatTensor) *
-                             -(math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position.type(torch.FloatTensor) * div_term.type(torch.FloatTensor))
-        pe[:, 1::2] = torch.cos(position.type(torch.FloatTensor) * div_term.type(torch.FloatTensor))
-        self.register_buffer('pe', pe)
-        self.dropout = nn.Dropout(p=dropout)
-    def forward(self, x):
-        x = x + Variable(self.pe[0:x.size(0), :x.size(1)], 
-                         requires_grad=False)
-        return self.dropout(x)
-
 
 class encoder(nn.Module):
     def __init__(self, n, dim, d_ff, dropout, heads):
@@ -471,7 +448,8 @@ class Trainer(object):
         self.model = model
         self.optimizer = optim.Adam(self.model.parameters(),
                                     lr=1e-7, weight_decay=weight_decay) ##start with warm up rate
-
+        self.batch_size=batch_size
+        
     def train(self, dataset):
         np.random.shuffle(dataset)
         N = len(dataset)
@@ -482,6 +460,7 @@ class Trainer(object):
             loss.backward()
             self.optimizer.step()
             loss_total += loss.to('cpu').data.numpy()
+            loss_total /= self.batch_size
         return loss_total
 
 

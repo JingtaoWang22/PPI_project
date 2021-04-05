@@ -1,2 +1,5 @@
 # PPI_project
-A protein-protein interaction prediction model using transformer for protein representation learning.
+A deep learning model for protein-protein interactions prediction. CMU 02725 course project.
+
+
+
