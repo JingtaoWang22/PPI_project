@@ -42,13 +42,13 @@ layer_output=1
 heads=2
 n_encoder=3
 n_decoder=1
-lr=1e-4 
+lr=1e-3 
 lr_decay=0.6
 decay_interval=10 
 weight_decay=0
 iteration=100 
 warmup_step=50
-dropout=0
+dropout=0.1
 
 
 batch_size = 4
@@ -451,16 +451,27 @@ class Trainer(object):
         self.batch_size=batch_size
         
     def train(self, dataset):
+        
         np.random.shuffle(dataset)
         N = len(dataset)
         loss_total = 0
+        loss_batch = 0 
+        cnt = 0
         for data in dataset:
             loss = self.model(data)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            loss_total += loss.to('cpu').data.numpy()
-            loss_total /= self.batch_size
+            loss_batch += loss.to('cpu').data.numpy()
+            cnt += 1
+            
+            if (cnt == batch_size):
+                cnt = 0
+                self.optimizer.zero_grad()
+                
+                loss.backward()
+                self.optimizer.step()
+            
+                loss_total += loss_batch/self.batch_size
+                loss_batch = 0
+            
         return loss_total
 
 
