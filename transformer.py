@@ -42,8 +42,8 @@ layer_output=1
 heads=2
 n_encoder=3
 n_decoder=1
-lr=1e-3 
-lr_decay=0.6
+lr=5e-2 
+lr_decay=0.5
 decay_interval=10 
 weight_decay=0
 iteration=100 
@@ -459,17 +459,18 @@ class Trainer(object):
         cnt = 0
         for data in dataset:
             loss = self.model(data)
-            loss_batch += loss.to('cpu').data.numpy()
+            loss_batch += loss
             cnt += 1
             
             if (cnt == batch_size):
                 cnt = 0
                 self.optimizer.zero_grad()
                 
-                loss.backward()
+                
+                (loss_batch/self.batch_size).backward()
                 self.optimizer.step()
             
-                loss_total += loss_batch/self.batch_size
+                loss_total += loss_batch.to('cpu').data.numpy()
                 loss_batch = 0
             
         return loss_total
