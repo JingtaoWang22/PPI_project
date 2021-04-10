@@ -42,17 +42,31 @@ layer_output=1
 heads=2
 n_encoder=3
 n_decoder=1
-lr=5e-2 
+lr=5e-3 
 lr_decay=0.5
 decay_interval=10 
 weight_decay=0
-iteration=100 
+iteration=200 
 warmup_step=50
 dropout=0.1
+batch_size = 32
 
 
-batch_size = 4
-
+setting = f'ngram={ngram} DATASET={DATASET} radius={radius}\
+dim={dim}\
+d_ff={d_ff}\
+layer_output={layer_output}\
+heads={heads}\
+n_encoder={n_encoder}\
+n_decoder={n_decoder}\
+lr={lr}\
+lr_decay={lr_decay}\
+decay_interval={decay_interval}\
+weight_decay={weight_decay}\
+iteration={iteration}\
+warmup_step={warmup_step}\
+dropout={dropout}\
+batch_size = {batch_size}'
 
 ### PPI model
 
@@ -649,7 +663,7 @@ trainer = Trainer(model)
 tester = Tester(model)
 
 """Output files."""
-file_AUCs = 'output/result/AUCs.txt'
+file_AUCs = 'output/result/'+setting+'.txt'
 file_model = 'output/model/model'
 AUCs = ('Epoch\tTime(sec)\tLoss_train\tAUC_dev\t'
             'AUC_test\tPrecision_test\tRecall_test\tspecificity_test\tf1_test')
