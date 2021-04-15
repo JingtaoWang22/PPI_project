@@ -9,6 +9,7 @@ Used to create
 
 
 Yeast database from STRING:
+https://string-db.org/cgi/download?sessionId=%24input-%3E%7BsessionId%7D&species_text=Saccharomyces+cerevisiae
 4932.protein.links.v11.0.txt
 4932.protein.sequences.v11.0.fa
 parser: parse_yeast.py (can change the parameter regarding confidence and n(negative) vs. n(positive)
@@ -18,6 +19,6 @@ To create negative dataset: sampled randomly from the interacting proteins which
 Human dataset
 paper: https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1700-2
 source: http://www.csbio.sjtu.edu.cn/bioinf/LR_PPI/Data.htm
-Positive: humansuppA.txt
-Negative: humansuppB.txt
+Positive: SuppA
+Negative: SuppB
 parser: parse_humansupp.py
