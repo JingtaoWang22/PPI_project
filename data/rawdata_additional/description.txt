@@ -1,0 +1,15 @@
+Note: I think we could delete this folder when submitting the project for simplicity
+
+Yeast database from STRING:
+4932.protein.links.v11.0.txt
+4932.protein.sequences.v11.0.fa
+parser: parse_yeast.py (can change the parameter regarding confidence and n(negative) vs. n(positive)
+Filtered to get only positive interaction with confidence > 0.999
+To create negative dataset: sampled randomly from the interacting proteins which are not interacting; n(negative) = n(positive)
+
+Human dataset
+paper: https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1700-2
+source: http://www.csbio.sjtu.edu.cn/bioinf/LR_PPI/Data.htm
+Positive: humansuppA.txt
+Negative: humansuppB.txt
+parser: parse_humansupp.py
