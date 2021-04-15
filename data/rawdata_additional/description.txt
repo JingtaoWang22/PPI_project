@@ -1,5 +1,13 @@
 Note: I think we could delete this folder when submitting the project for simplicity
 
+Used to create
+-> human_ppi.txt
+-> human_dic.txt
+-> yeast_STRINGDB_ppi.txt
+-> yeast_STRINGDB_dic.txt
+
+
+
 Yeast database from STRING:
 4932.protein.links.v11.0.txt
 4932.protein.sequences.v11.0.fa
