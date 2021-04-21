@@ -35,24 +35,23 @@ import matplotlib.pyplot as plt
 ngram=3
 DATASET='yeast'
 
-radius='2'
 dim=10
 d_ff=10 
 layer_output=1
 heads=2
 n_encoder=3
 n_decoder=1
-lr=5e-3 
+lr=1e-3 
 lr_decay=0.5
 decay_interval=10 
 weight_decay=0
 iteration=200 
 warmup_step=50
 dropout=0.1
-batch_size = 32
+batch_size = 16
+k=55
 
-
-setting = f'ngram={ngram} DATASET={DATASET} radius={radius}\
+setting = f'T+Cngram={ngram} DATASET={DATASET}\
 dim={dim}\
 d_ff={d_ff}\
 layer_output={layer_output}\
@@ -66,7 +65,8 @@ weight_decay={weight_decay}\
 iteration={iteration}\
 warmup_step={warmup_step}\
 dropout={dropout}\
-batch_size = {batch_size}'
+batch_size = {batch_size}\
+k={k}'
 
 ### PPI model
 
@@ -87,19 +87,21 @@ class PPI_predictor(nn.Module):
         
         
         ##max pooling (k most excited neurons)
-        self.k=40
+        self.k=k
         
         ### models
 
         # cnn:
+        
         self.W_cnn = nn.ModuleList([nn.Conv2d(
                      in_channels=1, out_channels=1, kernel_size=2*11+1,
                      stride=1, padding=11) for _ in range(3)])
+        
         self.W_attention = nn.Linear(self.dim, self.dim)
         
-        
-        ## multi channel
         '''
+        ## multi channel
+        window=11
         self.W_cnn = nn.ModuleList([
             nn.Conv2d(in_channels=1, out_channels=2, 
                       kernel_size=2*window+1,
@@ -110,8 +112,8 @@ class PPI_predictor(nn.Module):
             nn.Conv2d(in_channels=2, out_channels=1, 
                       kernel_size=2*window+1,
                      stride=1, padding=window),
-            ])
-        '''
+            ])'''
+        
         
         # transformer:
         self.embed_word = nn.Embedding(n_word, self.dim)
@@ -160,14 +162,17 @@ class PPI_predictor(nn.Module):
         
         words1 = self.embed_word(p1)
         words2 = self.embed_word(p2)
-        
-        words1=self.attention_cnn(words1,3)
-        words2=self.attention_cnn(words2,3)
-        
+
         p1_vector = self.transformer(words1,
                                      self.n_encoder,self.n_decoder,self.heads)
         p2_vector = self.transformer(words2,
                                      self.n_encoder,self.n_decoder,self.heads)
+
+        
+        p1_vector=self.attention_cnn(p1_vector,3)
+        p2_vector=self.attention_cnn(p2_vector,3)
+        
+
         # attention CNN
         #protein_vector = self.attention_cnn(compound_vector,protein_vector,3)
         
@@ -524,8 +529,8 @@ class Tester(object):
         with open(filename, 'a') as f:
             f.write('\t'.join(map(str, AUCs)) + '\n')
 
-    def save_model(self, model, filename):
-        torch.save(model.state_dict(), filename)
+    #def save_model(self, model, filename):
+    #    torch.save(model.state_dict(), filename)
 
 def rm_long(dataset,length):
     d=[]
@@ -628,8 +633,7 @@ for i in ppi_lines:
 #dataset = rm_long(dataset,6000)
 dataset = shuffle_dataset(dataset, 1234)
 #dataset=dataset[:50]
-dataset_train, dataset_ = split_dataset(dataset, 0.8)
-dataset_dev, dataset_test = split_dataset(dataset_, 0.5)
+dataset_train, dataset_test = split_dataset(dataset, 0.8)
 
 
 print('Preprocessing finished. Ready for training.')
@@ -664,8 +668,8 @@ tester = Tester(model)
 
 """Output files."""
 file_AUCs = 'output/result/'+setting+'.txt'
-file_model = 'output/model/model'
-AUCs = ('Epoch\tTime(sec)\tLoss_train\tAUC_dev\t'
+file_model = 'output/model/model'+setting
+AUCs = ('Epoch\tTime(sec)\tLoss_train\t'
             'AUC_test\tPrecision_test\tRecall_test\tspecificity_test\tf1_test')
 with open(file_AUCs, 'w') as f:
     f.write(AUCs + '\n')
@@ -681,37 +685,43 @@ for epoch in range(1, warmup_step):
         
     trainer.optimizer.param_groups[0]['lr'] += (lr-1e-7)/warmup_step
     loss_train = trainer.train(dataset_train)
-    AUC_dev = tester.test(dataset_dev)[0]
     AUC_test, precision_test, recall_test,specificity_test,f1_test = tester.test(dataset_test)
     end = timeit.default_timer()
     time = end - start
-    AUCs = [epoch, time, loss_train, AUC_dev,
+    AUCs = [epoch, time, loss_train, 
              AUC_test, precision_test, recall_test,specificity_test,f1_test]
     tester.save_AUCs(AUCs, file_AUCs)
-    tester.save_model(model, file_model)
+    #tester.save_model(model, file_model)
     print('\t'.join(map(str, AUCs)))
         
+best_model=copy.deepcopy(model)
+best_auc=0
+best_itr=0
 for epoch in range(1, iteration):
 
     if epoch % decay_interval == 0:
         trainer.optimizer.param_groups[0]['lr'] *= lr_decay
 
     loss_train = trainer.train(dataset_train)
-    AUC_dev = tester.test(dataset_dev)[0]
     AUC_test, precision_test, recall_test,specificity_test,f1_test = tester.test(dataset_test)
-
+    
+    if (AUC_test > best_auc):
+        best_auc=AUC_test
+        best_model=copy.deepcopy(model)
+        best_itr=epoch
+    
     end = timeit.default_timer()
     time = end - start
 
-    AUCs = [epoch, time, loss_train, AUC_dev,
+    AUCs = [epoch, time, loss_train, 
             AUC_test, precision_test, recall_test,specificity_test,f1_test]
     tester.save_AUCs(AUCs, file_AUCs)
-    tester.save_model(model, file_model)
+    #tester.save_model(model, file_model)
 
     print('\t'.join(map(str, AUCs)))
 
-
-
+torch.save(best_model.state_dict(), file_model)
+print('The best epoch is: '+str(best_itr))
 
 
 
