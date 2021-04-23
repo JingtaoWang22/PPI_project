@@ -511,7 +511,7 @@ for epoch in range(1, iteration):
     
     if (AUC_test > best_auc):
         best_auc=AUC_test
-        best_model=copy.deepcopy(model)
+        torch.save(best_model.state_dict(), file_model)
         best_itr=epoch
     
     end = timeit.default_timer()
