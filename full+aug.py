@@ -39,10 +39,11 @@ dim=10
 d_ff=10 
 layer_output=1
 heads=2
-
+n_encoder=3
+n_decoder=1
 lr=1e-3 
-lr_decay=0.5
-decay_interval=10 
+lr_decay=0.8
+decay_interval=20 
 weight_decay=0
 iteration=200 
 warmup_step=50
@@ -50,11 +51,13 @@ dropout=0.1
 batch_size = 16
 k=55
 
-setting = f'best22CNNngram={ngram} DATASET={DATASET}\
+setting = f'AUG_T+Cngram={ngram} DATASET={DATASET}\
 dim={dim}\
 d_ff={d_ff}\
 layer_output={layer_output}\
 heads={heads}\
+n_encoder={n_encoder}\
+n_decoder={n_decoder}\
 lr={lr}\
 lr_decay={lr_decay}\
 decay_interval={decay_interval}\
@@ -73,6 +76,8 @@ class PPI_predictor(nn.Module):
         
         
         ### hyperparameters:        
+        self.n_encoder=n_encoder
+        self.n_decoder=n_decoder
         self.heads=heads
         self.dropout = dropout
         self.dim=dim
@@ -113,6 +118,10 @@ class PPI_predictor(nn.Module):
         # transformer:
         self.embed_word = nn.Embedding(n_word, self.dim)
 
+        self.encoder=encoder(self.n_encoder, self.dim, self.d_ff, self.dropout, heads=self.heads)
+        self.decoder=decoder(self.n_decoder, self.dim, self.d_ff, self.dropout, heads=self.heads)
+        
+        self.tgt1=tgt_out( self.heads, self.dim, dropout=0)
         
         ## concate & attention
         self.W_ff1 = nn.Linear(self.dim, self.dim)
@@ -140,17 +149,31 @@ class PPI_predictor(nn.Module):
         #return torch.unsqueeze(torch.mean(ys, 0), 0)
         return xs
         
-
+    def transformer(self, protein, n_encoder, n_decoder, heads):
+        protein=self.encoder(protein)
+        return protein
         
     def forward(self, inputs): ## inputs=[p1,p2,interaction]
 
         p1, p2 = inputs
-
+        '''
+        if (len(p1)<50):
+            p1 = torch.cat((p1,p1))
+        if (len(p2)<50):
+            p2 = torch.cat((p2,p2))
+        
+        '''
 
         """Processing each protein representations with PROTEIN TRANSFORMER """
         
-        p1_vector = self.embed_word(p1)
-        p2_vector = self.embed_word(p2)
+        words1 = self.embed_word(p1)
+        words2 = self.embed_word(p2)
+
+        p1_vector = self.transformer(words1,
+                                     self.n_encoder,self.n_decoder,self.heads)
+        p2_vector = self.transformer(words2,
+                                     self.n_encoder,self.n_decoder,self.heads)
+
         
         p1_vector=self.attention_cnn(p1_vector,3)
         p2_vector=self.attention_cnn(p2_vector,3)
@@ -186,6 +209,7 @@ class PPI_predictor(nn.Module):
         p_attn = F.softmax(scores, dim = 2)                 # heads, length, length
 
 
+        
         x1=torch.matmul(p_attn, value1)                       # heads, length, dk
         x1=x1.transpose(0,1).contiguous().view([nwords,self.heads * d_k]) 
         x1=self.linears[-1](x1) # k x dim
@@ -206,7 +230,18 @@ class PPI_predictor(nn.Module):
         
         return interaction,p1_vector,p2_vector
     
-
+    def attnscore(self,p1): ## probably not useful because the model has changed
+        words1 = self.embed_word(p1)
+        
+        words1=self.attention_cnn(words1,3)
+        
+        p1_vector = self.transformer(words1,
+                                     self.n_encoder,self.n_decoder,self.heads)
+        scores = torch.matmul(p1_vector,p1_vector.T)                    # heads, length, length
+        p_attn = F.softmax(scores, dim = 1)
+        fig, ax = plt.subplots()
+        im = ax.imshow(p_attn.detach())
+        print(p_attn)
         
         
     def __call__(self, data, train=True):
@@ -235,6 +270,163 @@ class PPI_predictor(nn.Module):
 def clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
 
+class encoder(nn.Module):
+    def __init__(self, n, dim, d_ff, dropout, heads):
+        super(encoder, self).__init__()
+        self.layers = clones(encoder_layer(dim, heads, 
+                             self_attn(heads, dim, dropout).to(device), 
+                             PositionwiseFeedForward(dim, d_ff), dropout), n)
+        
+    def forward(self, x, mask=None): 
+        for layer in self.layers:
+            x = layer(x, mask)
+        return x
+
+class decoder(nn.Module):
+    def __init__(self, n, dim, d_ff, dropout, heads):
+        super(decoder, self).__init__()
+        self.layers = clones(decoder_layer(dim, heads, 
+                             tgt_attn(heads, dim,dropout).to(device), 
+                             self_attn(heads, dim, dropout).to(device),
+                             PositionwiseFeedForward(dim, d_ff), dropout), n)
+        self.tgt_out = tgt_out(heads, dim, dropout)
+        self.final_norm = LayerNorm(dim)
+    def forward(self, x, tgt):
+        for layer in self.layers:
+            x = layer(x, tgt)
+        x=self.tgt_out(tgt,x,x)
+        x=self.final_norm(x)
+        return x
+
+## attentions:
+class self_attn(nn.Module):
+    def __init__(self, h, dim, dropout=0):
+        super(self_attn, self).__init__()
+        assert dim % h == 0
+        # We assume d_v always equals d_k
+        self.d_k = dim // h
+        self.h = h
+        self.linears = clones(nn.Linear(dim, dim), 3)
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
+        
+    def forward(self, query, key, value, mask=None): 
+        if mask is not None:
+            mask = mask.unsqueeze(1)
+        nwords = key.size(0) 
+      
+        query, key, value = \
+            [l(x).view(nwords, -1, self.h, self.d_k).transpose(1, 2)
+             for l, x in zip(self.linears, (query, key, value))]
+        # qkv.size() = length,heads,1,dk
+            
+        query=query.squeeze(2).transpose(0,1)               # heads, length, dk
+        key=key.squeeze(2).transpose(0,1).transpose(1,2)    # heads, dk, length
+        value=value.squeeze(2).transpose(0,1)               # heads, length, dk
+        
+        scores = torch.matmul(query,key)                    # heads, length, length
+        p_attn = F.softmax(scores, dim = 2)                 # heads, length, length
+        if self.dropout is not None:
+            p_attn = self.dropout(p_attn)
+        
+        x=torch.matmul(p_attn, value)                       # heads, length, dk
+        x=x.transpose(0,1).contiguous().view([nwords,self.h * self.d_k]) 
+        #x=x.transpose(0,1).view([nwords,self.h * self.d_k]) 
+        self.attn=p_attn  
+        
+        return self.linears[-1](x).unsqueeze(1)  
+
+class tgt_out(nn.Module):    
+    def __init__(self, h, dim, dropout=0):
+        super(tgt_out, self).__init__()
+        assert dim % h == 0
+        # We assume d_v always equals d_k
+        self.d_k = dim // h
+        self.h = h
+        self.tgt_linear = nn.Linear(10,dim)
+        self.linears = clones(nn.Linear(dim, dim), 4)
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
+    def forward(self, query, key, value, mask=None):   #q=tgt, k=self, v=self 
+        nwords = key.size(0) 
+        query = self.tgt_linear(query) # from gnn_dim to dim
+        query = self.linears[0](query).view(-1,self.h,self.d_k).transpose(0,1)        # heads, 1, dk
+        key   = self.linears[1](key).view(nwords,-1,self.h,self.d_k).transpose(1,2)   # length, heads, 1, dk
+        value = self.linears[2](value).view(nwords,-1,self.h,self.d_k).transpose(1,2) # length, heads, 1, dk
+
+        key=key.squeeze(2).transpose(0,1).transpose(1,2)    # heads, dk, length
+        scores = torch.matmul(query,key) 
+        p_attn = F.softmax(scores, dim = 2)     # heads,1,length
+
+        if self.dropout is not None:
+            p_attn = self.dropout(p_attn)
+        value=value.squeeze(2).transpose(0,1)   # heads,length,dk 
+        
+        x=torch.matmul(p_attn, value)         
+        x=x.transpose(0,1).contiguous().view([1,self.h * self.d_k]) 
+        self.attn=p_attn  
+        
+        return self.linears[-1](x) 
+    
+class tgt_attn(nn.Module):    
+    def __init__(self, h, dim, dropout=0):
+        super(tgt_attn, self).__init__()
+        assert dim % h == 0
+        # We assume d_v always equals d_k
+        self.d_k = dim // h
+        self.h = h
+        self.tgt_linear = nn.Linear(10,dim)
+        self.linears = clones(nn.Linear(dim, dim), 4)
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
+    def forward(self, query, key, value, mask=None):   #q=tgt, k=self, v=self 
+        nwords = key.size(0) 
+        query = self.tgt_linear(query) # from gnn_dim to dim
+        query = self.linears[0](query).view(-1,self.h,self.d_k).transpose(0,1)        # heads, 1, dk
+        key   = self.linears[1](key).view(nwords,-1,self.h,self.d_k).transpose(1,2)   # length, heads, 1, dk
+        value = self.linears[2](value).view(nwords,-1,self.h,self.d_k).transpose(1,2) # length, heads, 1, dk
+
+        key=key.squeeze(2).transpose(0,1).transpose(1,2)    # heads, dk, length
+        scores = torch.matmul(query,key) 
+        p_attn = F.softmax(scores, dim = 2).transpose(1,2)     # heads,length,1
+
+        if self.dropout is not None:
+            p_attn = self.dropout(p_attn)
+        
+        value=value.squeeze(2).transpose(0,1)                  # heads,length,dk
+        
+        x=p_attn*value       #  heads,length,dk
+        x=x.transpose(0,1).contiguous().view([nwords,self.h * self.d_k]) 
+        self.attn=p_attn     #  length, dim
+        
+        return self.linears[-1](x) 
+## end of attentions
+
+
+## encoder & decoder layers
+class encoder_layer(nn.Module):
+    def __init__(self, dim, heads, self_attn, feedforward, dropout):  
+        super(encoder_layer, self).__init__()
+        self.res_layer = [residual_layer( dim, dropout,self_attn),
+                          residual_layer( dim, dropout,feedforward)]
+        self.dim=dim
+    def forward(self, x, mask=None):
+        x = self.res_layer[0](x,x,x)
+        return self.res_layer[1](x)
+    
+    
+class decoder_layer(nn.Module):
+    def __init__(self, dim, heads, tgt_attn, self_attn, feedforward, dropout):  
+        super(decoder_layer, self).__init__()
+        self.res_layer = [residual_layer( dim, dropout,tgt_attn),
+                          residual_layer( dim, dropout,self_attn),
+                          residual_layer( dim, dropout,feedforward)]
+
+    def forward(self, x,tgt):
+        x = self.res_layer[0](x,tgt,x)  # res_layer: v, q, k
+        x = self.res_layer[1](x,x,x)        
+        return self.res_layer[2](x)
+## end of encoder & decoder layers
 
 class residual_layer(nn.Module):
     def __init__(self, size, dropout, sublayer):
@@ -249,6 +441,7 @@ class residual_layer(nn.Module):
         else:
             return self.norm(x+self.dropout(self.sublayer(x).squeeze(1)))
     
+    
 class LayerNorm(nn.Module):
     def __init__(self, size, eps=1e-6):
         super(LayerNorm, self).__init__()
@@ -261,7 +454,16 @@ class LayerNorm(nn.Module):
         std = x.std(-1, keepdim=True)
         #return norm+bias
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2   
+    
+class PositionwiseFeedForward(nn.Module):
+    def __init__(self, d_model, d_ff, dropout=0):
+        super(PositionwiseFeedForward, self).__init__()
+        self.w_1 = nn.Linear(d_model, d_ff).to(device)
+        self.w_2 = nn.Linear(d_ff, d_model).to(device)
+        self.dropout = nn.Dropout(dropout).to(device)
 
+    def forward(self, x):
+        return self.w_2(self.dropout(F.relu(self.w_1(x))))
     
 ### end of transformer
 
@@ -365,6 +567,12 @@ def split_dataset(dataset, ratio):
 
 
 
+def rm_short(dataset,length):
+    d=[]
+    for i in dataset:
+        if (i[1].size()[0]>length and i[0].size()[0]>length):
+            d.append(i)
+    return d
 
 
 
@@ -387,7 +595,7 @@ else:
 
 ## reading dataset
 # protein dictionary
-dic_file=open('data/'+DATASET+'_dic.tsv','r')
+dic_file=open('data/'+ DATASET +'_dic.tsv','r')
 dic_lines=dic_file.readlines()
 dic={}
 for i in dic_lines:
@@ -435,11 +643,18 @@ for i in ppi_lines:
 ### datasets:
     
 #dataset = rm_long(dataset,6000)
+
+print(len(ppi_lines))
+
 dataset = shuffle_dataset(dataset, 1234)
-#dataset=dataset[:50]
+#dataset = rm_long(dataset,6000)
+#dataset = rm_short(dataset,55)
+
+print(len(dataset))
 dataset_train, dataset_test = split_dataset(dataset, 0.8)
 
 
+## data augmentation:
 aug=[]
 for data in dataset_train:
     p1 = data[0]
@@ -450,31 +665,6 @@ for data in dataset_train:
 dataset_train = dataset_train + aug
 dataset_train = shuffle_dataset(dataset_train, 1234)
 
-
-def check(dataset1,dataset2):
-    for i in range(len(dataset1)):
-        for j in range(len(dataset2)):
-            d1=dataset1[i]
-            d2=dataset2[j]
-            
-            p1=d1[0]
-            p2=d1[1]
-            
-            pa=d2[0]
-            pb=d2[1]
-            
-            if (len(p1)==len(pa) and len(p2)==len(pb)):
-                if (str(p1)==str(pa) and str(p2)==str(pb)):
-                    print(i,j)
-            if (len(p1)==len(pb) and len(p2)==len(pa)):
-                if (str(p1)==str(pb) and str(p2)==str(pa)):
-                    print(i,j,"qwe")
-    
-
-'''
-for i in range(len(dataset_test)):
-    dataset_test[i][2] = torch.tensor([1]).to(device)-dataset_test[i][2]
-'''
 print('Preprocessing finished. Ready for training.')
 
 
@@ -507,7 +697,7 @@ tester = Tester(model)
 
 """Output files."""
 file_AUCs = 'output/result/'+setting+'.txt'
-file_model = 'output/model/cnn_model'+setting
+file_model = 'output/model/model'+setting
 AUCs = ('Epoch\tTime(sec)\tLoss_train\t'
             'AUC_test\tPrecision_test\tRecall_test\tspecificity_test\tf1_test')
 with open(file_AUCs, 'w') as f:
@@ -519,7 +709,7 @@ print(AUCs)
 start = timeit.default_timer()
 
 
-
+ 
 for epoch in range(1, warmup_step):
         
     trainer.optimizer.param_groups[0]['lr'] += (lr-1e-7)/warmup_step
@@ -543,11 +733,11 @@ for epoch in range(1, iteration):
 
     loss_train = trainer.train(dataset_train)
     AUC_test, precision_test, recall_test,specificity_test,f1_test = tester.test(dataset_test)
-    '''
+    
     if (AUC_test > best_auc):
         best_auc=AUC_test
-        torch.save(best_model.state_dict(), file_model)
-        best_itr=epoch'''
+        torch.save(model.state_dict(), file_model)
+        best_itr=epoch
     
     end = timeit.default_timer()
     time = end - start
@@ -558,11 +748,11 @@ for epoch in range(1, iteration):
     #tester.save_model(model, file_model)
 
     print('\t'.join(map(str, AUCs)))
-'''
-torch.save(best_model.state_dict(), file_model)
+
+#torch.save(model.state_dict(), file_model)
 print('The best epoch is: '+str(best_itr))
 
-'''
+
 
 
 
