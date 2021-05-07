@@ -41,17 +41,17 @@ layer_output=1
 heads=2
 n_encoder=3
 n_decoder=1
-lr=1e-2 
+lr=15e-4
 lr_decay=0.5
 decay_interval=10 
 weight_decay=0
-iteration=200 
+iteration=400 
 warmup_step=50
 dropout=0.1
 batch_size = 16
-k=55
+#k=55
 
-setting = f'T+Cngram={ngram} DATASET={DATASET}\
+setting = f'AVGnew_only_attention_ngram={ngram} DATASET={DATASET}\
 dim={dim}\
 d_ff={d_ff}\
 layer_output={layer_output}\
@@ -66,7 +66,7 @@ iteration={iteration}\
 warmup_step={warmup_step}\
 dropout={dropout}\
 batch_size = {batch_size}\
-k={k}'
+'
 
 ### PPI model
 
@@ -87,7 +87,7 @@ class PPI_predictor(nn.Module):
         
         
         ##max pooling (k most excited neurons)
-        self.k=k
+        #self.k=k
         
         ### models
 
@@ -128,10 +128,17 @@ class PPI_predictor(nn.Module):
         self.W_ff2 = nn.Linear(self.dim, self.dim)
         self.linears = clones(nn.Linear(dim, dim), 4)
         # interaction:
-        self.W_out = nn.Linear(self.k, 1)
+        #self.W_out = nn.Linear(self.k, 1)
+        
+        self.W_out1 = nn.Linear(2*self.dim, 2*self.dim)
+        self.W_out2 = nn.Linear(2*self.dim, 2*self.dim)
+        self.W_out3 = nn.Linear(2*self.dim, 2*self.dim)
+        
         self.W_interaction = nn.Linear(2*self.dim, 2)
         
-    
+        self.W_prob = nn.Linear(1,2)
+        
+        
     def attention_cnn(self,  xs, layer):
         """The attention mechanism is applied to the last layer of CNN."""
 
@@ -185,7 +192,7 @@ class PPI_predictor(nn.Module):
         p2=self.W_ff2(p2_vector)  # k x dim
         
         
-        nwords = self.k
+        #nwords = self.k
         l1=p1.size()[0]
         l2=p2.size()[0]
         d_k=int(self.dim/self.heads)
@@ -208,33 +215,40 @@ class PPI_predictor(nn.Module):
         value1=value1.squeeze(2).transpose(0,1)               # heads, length, dk
         value2=value2.squeeze(2).transpose(0,1)  
         scores = torch.matmul(query,key)                    # heads, length, length
+        
+        
         p_attn = F.softmax(scores, dim = 2)                 # heads, length, length
 
         #p1=p1_vector.topk(self.k,dim=0).values
         #p2=p2_vector.topk(self.k,dim=0).values
-        
-        #print(p_attn.size())
-        #print(value1.size())
-        #print(value2.size())
-        
+
         
         x1=torch.matmul(p_attn.transpose(1,2), value1)                       # heads, length, dk
         x1=x1.transpose(0,1).contiguous().view([l2,self.heads * d_k]) 
         x1=self.linears[-1](x1) # k x dim
-        x1=x1.sum(dim=0).view([1,self.dim])
+        
+        x1=x1.sum(dim=0).view([1,self.dim])/l1
         
         
         x2=torch.matmul(p_attn, value2)                       # heads, length, dk
         x2=x2.transpose(0,1).contiguous().view([l1,self.heads * d_k]) 
         x2=self.linears[-1](x2)
-        x2=x2.sum(dim=0).view([1,self.dim])
+        
+        x2=x2.sum(dim=0).view([1,self.dim])/l2
         
         
         cat_vector = torch.cat((x1, x2), 1)
         
-        #print(cat_vector.size())
+        cat_vector = self.W_out1(cat_vector)
+        cat_vector = self.W_out2(cat_vector)
+        cat_vector = self.W_out3(cat_vector)
+        
         
         interaction = self.W_interaction(cat_vector)
+        
+        
+        
+        #interaction = self.W_prob(scores.sum().reshape((1,1)))
         
         return interaction,p1_vector,p2_vector
     
